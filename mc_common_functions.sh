@@ -54,7 +54,7 @@ mc_start() {
 				as_user "touch ${STATE_FILE}"
 
 				# Disable automatic saving?
-				if [ "${DISABLE_AUTOSAVE}" = "true" ]
+				if [ ${START_TO_DISABLE_AUTOSAVE_DELAY} -ge 0 ]
 				then
 					sleep ${START_TO_DISABLE_AUTOSAVE_DELAY}
 					mc_saveoff
@@ -89,13 +89,19 @@ mc_stop() {
 	then
 		echo "${L_PREFIX} [INFO] mc_stop(): Stopping ${SERVICE}" | tee -a ${EVENT_LOG_FILE}
 
-		if [ "${1}" = "broadcast" ]
-		then
-			as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"say §dSERVER SHUTTING DOWN NOW. Saving the map...\"\015'"
-		fi
+		if [ ${SAVEALL_STOP_INTERVAL} -ge 0 ]; then
+			if [ "${1}" = "broadcast" ]; then
+				as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"say §dSERVER SHUTTING DOWN NOW. Saving the map...\"\015'"
+			fi
 
-		as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"save-all\"\015'"
-		sleep ${SAVEALL_STOP_INTERVAL}
+			as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"save-all\"\015'"
+			sleep ${SAVEALL_STOP_INTERVAL}
+		else
+			if [ "${1}" = "broadcast" ]; then
+				as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"say §dSERVER SHUTTING DOWN NOW!!\"\015'"
+				sleep 3
+			fi
+		fi
 
 		as_user "screen -p 0 -S ${SCREEN_SESSION} -X eval 'stuff \"stop\"\015'"
 		sleep ${POST_STOP_DELAY}
@@ -323,15 +329,20 @@ mc_sync() {
 		# Check if the server process is running
 		if pgrep -u ${USERNAME} -f ${SERVICE} > /dev/null
 		then
-			mc_say "§dSYNCING WORLD DATA TO DISK, server going read-only"
+			mc_say "§dSyncing world data to disk, server going read-only"
 			mc_saveoff
-			mc_saveall
-			sleep ${SAVEALL_BACKUP_INTERVAL}
+
+			if [ ${SAVEALL_BACKUP_INTERVAL} -ge 0 ]; then
+				mc_saveall
+				sleep ${SAVEALL_BACKUP_INTERVAL}
+			else
+				sleep 2
+			fi
 
 			# Copy the save files from the temp directory (in RAM) into the actual server directory
 			copy_save_files_from_tmp_to_game_dir
 
-			mc_say "§dSYNCING WORLD DATA TO DISK FINISHED, server going read-write"
+			mc_say "§dSyncing world data to disk finished, server going read-write"
 			mc_saveon
 		# Server not running, but the temp path exists
 		elif [ -e "${WORLD_PATH_TMP}" ]; then
@@ -453,8 +464,9 @@ mc_backup() {
 
 		if [ $RET -ne 0 ]; then
 			L_PREFIX=`date "+%Y-%m-%d %H:%M:%S"`
-			echo "${L_PREFIX} [INFO] mc_backup(): Failed to copy save files from temp to game dir for instance '${INSTANCE}'" | tee -a ${EVENT_LOG_FILE} > /dev/null
+			echo "${L_PREFIX} [INFO] mc_backup(): Failed to copy save files from temp to game dir for instance '${INSTANCE}'" | tee -a ${EVENT_LOG_FILE}
 			echo "${L_PREFIX} [INFO] mc_backup(): Failed to copy save files from temp to game dir for instance '${INSTANCE}'" | tee -a ${BACKUP_LOG_FILE} > /dev/null
+			return 1
 		fi
 	fi
 
@@ -464,15 +476,15 @@ mc_backup() {
 
 		if [ "${BACKUP_WORLD_ONLY}" = "true" ]
 		then
-			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using tar" | tee -a ${EVENT_LOG_FILE} > /dev/null
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using tar" | tee -a ${EVENT_LOG_FILE}
 			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using tar" | tee -a ${BACKUP_LOG_FILE} > /dev/null
 
-			as_user "cd ${INSTANCE_PATH} && tar --exclude '.git' -czpf ${BACKUP_PATH}/${BACKUP_PREFIX}_world_${TIMESTAMP_TAR}.tar.gz ${WORLD_NAME} | tee -a ${BACKUP_LOG_FILE} > /dev/null 2>&1"
+			as_user "cd ${INSTANCE_PATH} && tar --exclude '.git' -czpf ${BACKUP_PATH_TAR}/${BACKUP_PREFIX}_world_${TIMESTAMP_TAR}.tar.gz ${WORLD_NAME} | tee -a ${BACKUP_LOG_FILE} > /dev/null 2>&1"
 		else
-			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using tar" | tee -a ${EVENT_LOG_FILE} > /dev/null
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using tar" | tee -a ${EVENT_LOG_FILE}
 			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using tar" | tee -a ${BACKUP_LOG_FILE} > /dev/null
 
-			as_user "cd `dirname ${INSTANCE_PATH}` && tar --exclude '.git' -czpf ${BACKUP_PATH}/${BACKUP_PREFIX}_${TIMESTAMP_TAR}.tar.gz `basename ${INSTANCE_PATH}` | tee -a ${BACKUP_LOG_FILE} > /dev/null 2>&1"
+			as_user "cd `dirname ${INSTANCE_PATH}` && tar --exclude '.git' -czpf ${BACKUP_PATH_TAR}/${BACKUP_PREFIX}_${TIMESTAMP_TAR}.tar.gz `basename ${INSTANCE_PATH}` | tee -a ${BACKUP_LOG_FILE} > /dev/null 2>&1"
 		fi
 	fi
 
@@ -496,15 +508,33 @@ mc_backup() {
 
 		if [ "${BACKUP_WORLD_ONLY}" = "true" ]
 		then
-			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using git" | tee -a ${EVENT_LOG_FILE} > /dev/null
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using git" | tee -a ${EVENT_LOG_FILE}
 			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using git" | tee -a ${BACKUP_LOG_FILE} > /dev/null
 
-			as_user "cd ${WORLD_PATH_SYMLINK} && git add -A . | tee -a ${BACKUP_LOG_FILE} && git commit ${GIT_PRM_ALLOW_EMPTY} -m \"${TIMESTAMP_GIT}${MSG}\" | tee -a ${BACKUP_LOG_FILE}"
+			as_user "cd ${WORLD_PATH_REAL} && git add -A . | tee -a ${BACKUP_LOG_FILE} && git commit ${GIT_PRM_ALLOW_EMPTY} -m \"${TIMESTAMP_GIT}${MSG}\" | tee -a ${BACKUP_LOG_FILE}"
 		else
-			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using git" | tee -a ${EVENT_LOG_FILE} > /dev/null
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using git" | tee -a ${EVENT_LOG_FILE}
 			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using git" | tee -a ${BACKUP_LOG_FILE} > /dev/null
 
 			as_user "cd ${INSTANCE_PATH} && git add -A . | tee -a ${BACKUP_LOG_FILE} && git commit ${GIT_PRM_ALLOW_EMPTY} -m \"${TIMESTAMP_GIT}${MSG}\" | tee -a ${BACKUP_LOG_FILE}"
+		fi
+	fi
+
+	if [ "${BACKUP_USING_RESTIC}" = "true" ]
+	then
+		L_PREFIX=`date "+%Y-%m-%d %H:%M:%S"`
+
+		if [ "${BACKUP_WORLD_ONLY}" = "true" ]
+		then
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using restic" | tee -a ${EVENT_LOG_FILE}
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the world of '${INSTANCE}' using restic" | tee -a ${BACKUP_LOG_FILE} > /dev/null
+
+			as_user "restic -r ${BACKUP_RESTIC_REPO} backup \"${INSTANCE_PATH}/${WORLD_NAME}\" --verbose --exclude \".git\" | tee -a ${BACKUP_LOG_FILE}"
+		else
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using restic" | tee -a ${EVENT_LOG_FILE}
+			echo "${L_PREFIX} [INFO] mc_backup(): Starting a backup of the server '${INSTANCE}' using restic" | tee -a ${BACKUP_LOG_FILE} > /dev/null
+
+			as_user "restic -r ${BACKUP_RESTIC_REPO} backup \"${INSTANCE_PATH}\" --verbose --exclude \".git\" | tee -a ${BACKUP_LOG_FILE}"
 		fi
 	fi
 
@@ -523,13 +553,29 @@ mc_backup() {
 	echo "${L_PREFIX} [INFO] mc_backup(): Backup of server instance '${INSTANCE}' complete" | tee -a ${BACKUP_LOG_FILE} > /dev/null
 }
 
+mc_backups_list() {
+	if [ "${BACKUP_USING_RESTIC}" = "true" ]
+	then
+		L_PREFIX=`date "+%Y-%m-%d %H:%M:%S"`
+
+		echo "${L_PREFIX} [INFO] mc_backups_list(): Listing latest backups of '${INSTANCE}' made with restic" | tee -a ${EVENT_LOG_FILE}
+		echo "${L_PREFIX} [INFO] mc_backups_list(): Listing latest backups of '${INSTANCE}' made with restic" | tee -a ${BACKUP_LOG_FILE} > /dev/null
+
+		as_user "restic -r ${BACKUP_RESTIC_REPO} snapshots | grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2}' | cut -d' ' -f1-4 | tail -n 15"
+	fi
+}
 
 mc_backup_wrapper() {
-	if [ "${DISABLE_AUTOSAVE}" == "true" ]
+	if [ ${START_TO_DISABLE_AUTOSAVE_DELAY} -ge 0 ]
 	then
 		mc_say "§dSERVER BACKUP STARTING"
-		mc_saveall
-		sleep ${SAVEALL_BACKUP_INTERVAL}
+
+		if [ ${SAVEALL_BACKUP_INTERVAL} -ge 0 ]; then
+			mc_saveall
+			sleep ${SAVEALL_BACKUP_INTERVAL}
+		else
+			sleep 2
+		fi
 
 		mc_backup "${1}"
 
@@ -537,8 +583,13 @@ mc_backup_wrapper() {
 	else
 		mc_say "§dSERVER BACKUP STARTING, server going read-only"
 		mc_saveoff
-		mc_saveall
-		sleep ${SAVEALL_BACKUP_INTERVAL}
+
+		if [ ${SAVEALL_BACKUP_INTERVAL} -ge 0 ]; then
+			mc_saveall
+			sleep ${SAVEALL_BACKUP_INTERVAL}
+		else
+			sleep 5
+		fi
 
 		mc_backup "${1}"
 

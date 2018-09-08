@@ -11,7 +11,6 @@ PORT="25565"		# Server port, used when running the check_ping command
 
 ALLOW_UPDATES='false'			# Allow upgrading the server version using the mc_update() function?
 ALLOW_DOWNGRADES='false'		# Allow downgrading the server version using the mc_update() function?
-DISABLE_AUTOSAVE='false'		# Run the save-off command after start?
 USE_TEMP_LOCATION='true'		# Copy the world to /tmp when starting, and back on stop
 
 SCREEN_SESSION="mc_${INSTANCE}"	# The screen session name that will be used for this server instance
@@ -22,6 +21,8 @@ BACKUP_USING_GIT='true'			# Create backups using git?
 								# NOTE: You have to run git init manually in the instance path (or the world path) before first backup
 								# NOTE 2: There must NOT be a world-only git repo under the world directory when doing
 								# full-server backups using git! Otherwise the world directory will not get backed up!
+BACKUP_USING_RESTIC='false'		# Make a backup using the restic backup program
+export RESTIC_PASSWORD=123
 
 BACKUP_WORLD_ONLY='false'		# Back up only the world directory, not the full server instance?
 
@@ -39,7 +40,10 @@ WORLD_PATH_TMP="${INSTANCE_PATH_TMP}/${WORLD_NAME}"
 
 SERVICE="minecraft_server_${INSTANCE}.jar"	# Server filename (symlink filename) in the INSTANCE directory
 
-BACKUP_PATH="/mnt/640_jemma/mc_backups/${INSTANCE}"
+BACKUP_PATH="/mnt/640_data/mc_backups/${INSTANCE}"
+BACKUP_PATH_TAR=${BACKUP_PATH}
+BACKUP_RESTIC_REPO="/mnt/640_data/mc_backups/${INSTANCE}.restic"
+
 STATE_FILE="/tmp/mc_server_${INSTANCE}_running.txt"
 EVENT_LOG_FILE="${BASE_PATH}/event_logs/${INSTANCE}_events.log"
 BACKUP_LOG_FILE="${BASE_PATH}/event_logs/${INSTANCE}_backups.log"
@@ -60,8 +64,12 @@ USERNAME='masa'
 CPU_COUNT=2
 
 #JVM_OPTS="-XX:+UseConcMarkSweepGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=${CPU_COUNT} -XX:+AggressiveOpts"
+# cpw's options from https://old.reddit.com/r/feedthebeast/comments/5jhuk9/modded_mc_and_memory_usage_a_history_with_a/
+#JVM_OPTS="-XX:+UseG1GC -Dsun.rmi.dgc.server.gcInterval=2147483646 -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M"
+
 JVM_OPTS="-XX:+UseConcMarkSweepGC"
-JVM_MEM_OPTS="-Xms1024M -Xmx2048M"
+
+JVM_MEM_OPTS="-Xms1G -Xmx2G"
 INVOCATION="java ${JVM_MEM_OPTS} ${JVM_OPTS} -Dlog4j.configurationFile=log4j2.xml -jar ${SERVICE} ${OPTIONS}"
 
 #########################
@@ -71,18 +79,18 @@ INVOCATION="java ${JVM_MEM_OPTS} ${JVM_OPTS} -Dlog4j.configurationFile=log4j2.xm
 POST_START_DELAY=1		# Delay after the command, before entering the check loop
 START_GRACE_DELAY=10	# How many times to loop/how long to wait for the server to come up
 
-START_TO_DISABLE_AUTOSAVE_DELAY=5	# Delay after server start before issuing the save-off command (if DISABLE_AUTOSAVE='true')
+START_TO_DISABLE_AUTOSAVE_DELAY=-1	# Delay after server start before issuing the save-off command. Use -1 to not disable auto-saves.
 
 POST_STOP_DELAY=1		# Delay after the command, before entering the check loop
 STOP_GRACE_DELAY=10		# How many times to loop/how long to wait for the server to shut down
 
 POST_SAVEALL_DELAY=3	# How long to wait after a save-all command before continuing
-SAVEALL_BACKUP_INTERVAL=5	# How long to wait after doing a save-all, before starting the backup
+SAVEALL_BACKUP_INTERVAL=-1	# How long to wait after doing a save-all, before starting the backup
 
 RESTART_FIRST_WARNING=5 # Broadcast a warning message on the server and wait this long before restarting
 RESTART_LAST_WARNING=2	# The second and last warning is broadcast this long before restarting
 
-SAVEALL_STOP_INTERVAL=3	# How long to wait after the save-all command, before the stop command
+SAVEALL_STOP_INTERVAL=-1	# How long to wait after the save-all command, before the stop command
 
 POST_KILL_DELAY=5		# How long to wait after issuing the kill signal, before entering the check loop
 KILL_GRACE_DELAY=10		# How many times to loop/how long to wait for the server to die, before throwing an error
@@ -96,7 +104,6 @@ KILL_TO_START_DELAY=10	# How long to wait after killing the server and before re
 #########################
 
 source ${COMMON_FUNCTIONS_SCRIPT}
-
 
 # Process the commands
 case "${1}" in
@@ -120,6 +127,9 @@ case "${1}" in
 		;;
 	backup)
 		mc_backup_wrapper
+		;;
+	backups_list)
+		mc_backups_list
 		;;
 	saveoff)
 		mc_saveoff
@@ -158,7 +168,7 @@ case "${1}" in
 		;;
 
 	*)
-		echo "Usage: /etc/init.d/minecraft {start|stop|restart|restartifup|check|check_ping|backup|saveoff|saveon|saveall|kill|update|say|status|command \"server command\"}"
+		echo "Usage: /etc/init.d/minecraft {start|stop|restart|restartifup|check|check_ping|backup|backups_list|saveoff|saveon|saveall|kill|update|say|status|command \"server command\"}"
 		exit 1
 		;;
 esac
